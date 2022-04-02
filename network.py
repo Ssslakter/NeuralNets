@@ -2,7 +2,7 @@ import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
 from tensorflow import keras
-from tensorflow.nn import convolution, max_pool
+from tensorflow import nn
 from imageProccesing import ImageProccessing
 import json
 np.random.seed(0)
@@ -54,7 +54,8 @@ class LayerConv2d:
                 (kernel_size, kernel_size, in_channels, out_channels))
         else:
             self.kernels = kernels
-        self.bias = np.zeros((out_channels, 1))
+        self.bias = np.zeros((out_channels, 1), dtype=np.float32)
+
         if activation_function == "relu":
             self.activation = Activation.relu
             self.derivative = Activation.d_relu
@@ -76,9 +77,19 @@ class LayerConv2d:
     def forward(self, image):
         image = np.pad(image, ((0, 0), (self.padding, self.padding),
                                (self.padding, self.padding), (0, 0)))
-        self.linear_comb = convolution(image, self.kernels, strides=[
-                                       self.stride] * 2, data_format="NHWC").numpy() + self.bias.reshape(1, 1, *self.bias.shape[::-1])
+        self.linear_comb = nn.convolution(image, self.kernels, strides=[
+            self.stride] * 2, data_format="NHWC").numpy() + self.bias.reshape(1, 1, *self.bias.shape[::-1])
         self.output = self.activation(self.linear_comb)
+
+    def backward(self, delta, input):
+        d_b = np.sum(delta, axis=(0, 1, 2))
+        conv_padding = [[0] * 2, [self.padding]
+                        * 2, [self.padding] * 2, [0] * 2]
+        d_w = nn.depthwise_conv2d_backprop_filter(input, self.kernels.shape, delta, [
+                                                  0, self.stride, self.stride, 0], conv_padding)
+        d_input = nn.depthwise_conv2d_backprop_input(input.shape, self.kernels, delta, [
+                                                     0, self.stride, self.stride, 0], conv_padding)
+        return d_b, d_w, d_input
 
 
 class MaxPooling:
@@ -95,8 +106,11 @@ class MaxPooling:
     def forward(self, image):
         image = np.pad(image, ((0, 0), (self.padding, self.padding),
                        (self.padding, self.padding), (0, 0)))
-        self.output = max_pool(image, self.kernel_size,
-                               self.stride, "VALID", data_format="NHWC").numpy()
+        self.output = nn.max_pool(image, self.kernel_size,
+                                  self.stride, "VALID", data_format="NHWC").numpy()
+
+    def backward(self, delta, input_shape):
+        output = np.zeros(input_shape)
 
 
 class LayerDense:
@@ -141,8 +155,7 @@ class Model:
         for i in range(1, self.size):
             if(isinstance(self.layers[i], LayerDense) and isinstance(self.layers[i - 1], (LayerConv2d, MaxPooling))):
                 input = self.layers[i - 1].output
-                input = input.reshape(input.shape[0], np.prod(
-                    input.shape) // input.shape[0])
+                input = input.reshape(input.shape[0], np.prod(input.shape[1:]))
                 self.layers[i].forward(input.T)
             else:
                 self.layers[i].forward(self.layers[i - 1].output)
@@ -156,12 +169,34 @@ class Model:
         m = output.shape[1]
         grads = [0] * self.size
         delta = output - y
+        conv_layer_count = 0
         for i in range(self.size - 1, 0, -1):
-            d_w = np.dot(delta, self.layers[i - 1].output.T) / m
             d_b = np.sum(delta, axis=1, keepdims=True) / m
+            if(isinstance(self.layers[i - 1], (LayerConv2d, MaxPooling))):
+                input = self.layers[i - 1].output
+                # now it will be in default dense layer shape
+                input = input.reshape(
+                    input.shape[0], np.prod(input.shape[1:])).T
+                d_w = np.dot(delta, input.T) / m
+                grads[i] = [d_w, d_b]
+                print(np.dot(self.layers[i].weights.T, delta).shape)
+                delta = np.dot(self.layers[i].weights.T, delta) * self.layers[i - 1].derivative(
+                    self.layers[i - 1].linear_comb)
+                conv_layer_count = i
+                break
+            d_w = np.dot(delta, self.layers[i - 1].output.T) / m
             grads[i] = [d_w, d_b]
             delta = np.dot(self.layers[i].weights.T, delta) * self.layers[i - 1].derivative(
                 self.layers[i - 1].linear_comb)
+
+        for i in range(conv_layer_count - 1, 0, -1):
+            layer = self.layers[i]
+            if(isinstance(layer, LayerConv2d)):
+                (d_b, d_w, delta) = layer.backward(
+                    delta, self.layers[i - 1].output)
+                print("d_w:", d_w.shape, "d_b:",
+                      d_b.shape, "delta:", delta.shape)
+                grads[i] = [d_w, d_b]
 
         d_w = np.dot(delta, input.T) / m
         d_b = np.sum(delta, axis=1, keepdims=True) / m
@@ -230,6 +265,7 @@ y_test = binarize(y_test)
 
 
 batch = X_train[:200].reshape((200, 28, 28, 1))
+batch_y = y_train[:200].T
 
 
 model = Model()
@@ -239,16 +275,16 @@ model.add(MaxPooling(3))
 model.add(LayerConv2d(32, 16, kernel_size=3, padding=1,
           stride=1, activation_function="relu"))
 
+model.add(MaxPooling(4, stride=2))
+model.add(LayerDense(400, 32, "relu"))
+model.add(LayerDense(32, 16, "relu"))
+model.add(LayerDense(16, 10, "softmax"))
 
-# model.add(MaxPooling(4,stride=2))
-#model.add(LayerDense(400, 32, "relu"))
-#model.add(LayerDense(32, 16, "relu"))
-#model.add(LayerDense(16, 10, "softmax"))
+ans = model.backward(batch, batch_y)
+#plt.imshow(batch[24], cmap="binary")
+#plt.imshow(ans[2, :, :, 1], cmap="binary")
+# plt.show()
 
-ans = model.forward(batch)
-plt.imshow(batch[24], cmap="binary")
-plt.imshow(ans[2, :, :, 1], cmap="binary")
-plt.show()
 '''
 test = np.loadtxt('five.txt', delimiter=",")
 plt.imshow(X_train[0], cmap=plt.cm.binary)

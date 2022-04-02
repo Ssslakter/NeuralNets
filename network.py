@@ -2,7 +2,8 @@ import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
 from tensorflow import keras
-from tensorflow.nn import convolution,max_pool
+from tensorflow.nn import convolution, max_pool
+from imageProccesing import ImageProccessing
 import json
 np.random.seed(0)
 
@@ -18,6 +19,8 @@ def cost(y_hat, y):
     return -np.sum(y * np.log(y_hat))
 
 # abstract class
+
+
 class Activation:
     def relu(x):
         y = np.copy(x)
@@ -25,10 +28,10 @@ class Activation:
         return y
 
     def sigmoid(x):
-        y=np.exp(x)/(1+np.exp(x))
+        y = np.exp(x) / (1 + np.exp(x))
 
     def d_sigmoid(x):
-        return Activation.sigmoid(x)*(1-Activation.sigmoid(x))
+        return Activation.sigmoid(x) * (1 - Activation.sigmoid(x))
 
     def softmax(x):
         y = np.exp(x)
@@ -40,16 +43,17 @@ class Activation:
         y[y > 0] = 1
         return y
 
+
 class LayerConv2d:
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation_function="relu",kernels=None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation_function="relu", kernels=None):
         self.output = None
         self.stride = stride
         self.padding = padding
         if kernels is None:
             self.kernels = self.__initialize_kernel(
-                ( kernel_size, kernel_size, in_channels,out_channels))
+                (kernel_size, kernel_size, in_channels, out_channels))
         else:
-            self.kernels=kernels
+            self.kernels = kernels
         self.bias = np.zeros((out_channels, 1))
         if activation_function == "relu":
             self.activation = Activation.relu
@@ -62,76 +66,37 @@ class LayerConv2d:
 
     def __initialize_kernel(self, size):
         stddev = 1 / np.sqrt(np.prod(size))
-        return np.random.normal(size=size,scale=stddev).astype(np.float32)
+        return np.random.normal(size=size, scale=stddev).astype(np.float32)
 
     def forward1(self, image):
-        (batch_size,  in_dim, _,in_channels_i) = image.shape
-        (  k_size, _, in_channels_k,amount) = self.kernels.shape
-        assert in_channels_k == in_channels_i, "Number of channels in image and kernels must be the same"
-
-        image = np.pad(image, ((0, 0), (self.padding, self.padding),
-                       (self.padding, self.padding),(0, 0)))
-
-        out_dim = int((in_dim + 2 * self.padding - k_size) / self.stride + 1)
-        output = np.zeros((batch_size,  out_dim, out_dim,amount))
-
-        for i in range(amount):
-            c_kernel=self.kernels[:,:,:,i]
-            curr_y = out_y = 0
-            while curr_y + k_size <= in_dim + 2 * self.padding:
-                curr_x = out_x = 0
-                while curr_x + k_size <= in_dim + 2 * self.padding:
-                    local=image[:, curr_y:curr_y + k_size, curr_x:curr_x + k_size,:]
-                    output[:, out_y, out_x,i] = np.sum(
-                        c_kernel* local, axis=(1,2,3))
-                    curr_x += self.stride
-                    out_x += 1
-                curr_y += self.stride
-                out_y += 1
-            output[:,:,:,i]+=self.bias[i]
-        self.linear_comb=output
-        self.output =self.activation(output)
+        self.linear_comb = ImageProccessing.my_convolution(
+            image, self.kernels, self.stride, self.padding) + self.bias.reshape(1, 1, *self.bias.shape[::-1])
+        self.output = self.activation(self.linear_comb)
 
     def forward(self, image):
-        image=np.pad(image, ((0, 0), (self.padding, self.padding),
-                       (self.padding, self.padding), (0, 0)))
-        self.linear_comb=convolution(image,self.kernels,strides=[self.stride]*2,data_format="NHWC").numpy()
-        self.output=self.activation(self.linear_comb)
+        image = np.pad(image, ((0, 0), (self.padding, self.padding),
+                               (self.padding, self.padding), (0, 0)))
+        self.linear_comb = convolution(image, self.kernels, strides=[
+                                       self.stride] * 2, data_format="NHWC").numpy() + self.bias.reshape(1, 1, *self.bias.shape[::-1])
+        self.output = self.activation(self.linear_comb)
+
 
 class MaxPooling:
     def __init__(self, kernel_size, stride=1, padding=0):
         self.output = None
         self.stride = stride
         self.padding = padding
-        self.kernel_size=kernel_size
+        self.kernel_size = kernel_size
 
     def forward1(self, image):
-        (batch_size, in_dim, _, in_channels_i) = image.shape
+        self.output = ImageProccessing.my_max_pool(
+            image, self.kernel_size, self.padding, self.stride)
+
+    def forward(self, image):
         image = np.pad(image, ((0, 0), (self.padding, self.padding),
-                       (self.padding, self.padding),(0, 0)))
-
-        out_dim = int((in_dim + 2 * self.padding -
-                      self.kernel_size) / self.stride + 1)
-        output = np.zeros((batch_size,  out_dim, out_dim,in_channels_i,))
-
-        curr_y = out_y = 0
-        while curr_y + self.kernel_size <= in_dim + 2 * self.padding:
-            curr_x = out_x = 0
-            while curr_x + self.kernel_size <= in_dim + 2 * self.padding:
-                output[:, out_y, out_x,:] = np.amax(
-                    image[:,  curr_y:curr_y + self.kernel_size, curr_x:curr_x + self.kernel_size,:], axis=(1, 2))
-                curr_x += self.stride
-                out_x += 1
-            curr_y += self.stride
-            out_y += 1
-
-        self.output = output
-
-    def forward(self,image):
-        (batch_size, in_dim, _, in_channels_i) = image.shape
-        image = np.pad(image, ((0, 0), (self.padding, self.padding),
-                       (self.padding, self.padding),(0, 0)))
-        self.output=max_pool(image,self.kernel_size,self.stride,"VALID",data_format="NHWC").numpy()
+                       (self.padding, self.padding), (0, 0)))
+        self.output = max_pool(image, self.kernel_size,
+                               self.stride, "VALID", data_format="NHWC").numpy()
 
 
 class LayerDense:
@@ -161,6 +126,7 @@ class LayerDense:
         self.linear_comb = np.dot(self.weights, input) + self.biases
         self.output = self.activation(self.linear_comb)
 
+
 class Model:
     def __init__(self):
         self.size = 0
@@ -173,9 +139,10 @@ class Model:
     def forward(self, input):
         self.layers[0].forward(input)
         for i in range(1, self.size):
-            if(isinstance(self.layers[i],LayerDense) and isinstance(self.layers[i-1],(LayerConv2d,MaxPooling))):
-                input=self.layers[i-1].output
-                input=input.reshape(input.shape[0],np.prod(input.shape)//input.shape[0])
+            if(isinstance(self.layers[i], LayerDense) and isinstance(self.layers[i - 1], (LayerConv2d, MaxPooling))):
+                input = self.layers[i - 1].output
+                input = input.reshape(input.shape[0], np.prod(
+                    input.shape) // input.shape[0])
                 self.layers[i].forward(input.T)
             else:
                 self.layers[i].forward(self.layers[i - 1].output)
@@ -262,7 +229,8 @@ y_train = binarize(y_train)
 y_test = binarize(y_test)
 
 
-batch = X_train[:200].reshape((200, 28, 28,1))
+batch = X_train[:200].reshape((200, 28, 28, 1))
+
 
 model = Model()
 model.add(LayerConv2d(1, 32, kernel_size=3, padding=2,
@@ -271,15 +239,16 @@ model.add(MaxPooling(3))
 model.add(LayerConv2d(32, 16, kernel_size=3, padding=1,
           stride=1, activation_function="relu"))
 
-#model.add(MaxPooling(4,stride=2))
+
+# model.add(MaxPooling(4,stride=2))
 #model.add(LayerDense(400, 32, "relu"))
 #model.add(LayerDense(32, 16, "relu"))
 #model.add(LayerDense(16, 10, "softmax"))
-ans.shape
-ans = model.forward(batch)
-plt.imshow(batch[24],cmap="binary")
-plt.imshow(ans[2,:,:,1],cmap="binary")
 
+ans = model.forward(batch)
+plt.imshow(batch[24], cmap="binary")
+plt.imshow(ans[2, :, :, 1], cmap="binary")
+plt.show()
 '''
 test = np.loadtxt('five.txt', delimiter=",")
 plt.imshow(X_train[0], cmap=plt.cm.binary)

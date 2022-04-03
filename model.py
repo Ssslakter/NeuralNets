@@ -1,31 +1,32 @@
 import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
-from network import Model
+from network import Model,LayerConv2d,LayerDense,MaxPooling,binarize
 from tensorflow import keras
 
 (X_train, y_train), (X_test, y_test) = np.asarray(
     keras.datasets.mnist.load_data())
 
 #Normalization
-X_train = (X_train / 255).astype(np.float32)
-X_test = (X_test / 255).astype(np.float32)
+X_train = (X_train / 255).astype(np.float64)
+X_test = (X_test / 255).astype(np.float64)
+y_train=binarize(y_train)
+y_test=y_test
 
 
 model = Model()
 model.add(LayerConv2d(1, 16, kernel_size=4, padding=2,
-          stride=1, activation_function="relu"))
-model.add(MaxPooling(3))
-model.add(LayerConv2d(16, 8, kernel_size=3, padding=1,
           stride=2, activation_function="relu"))
+model.add(MaxPooling(3))
+model.add(LayerConv2d(16, 10, kernel_size=3, padding=0,
+          stride=1, activation_function="relu"))
+model.add(MaxPooling(2))
+model.add(LayerDense(1000, 64, "relu"))
+model.add(LayerDense(64, 10, "softmax"))
 
-model.add(MaxPooling(3, stride=2))
-model.add(LayerDense(288, 32, "relu"))
-model.add(LayerDense(32, 10, "softmax"))
-
-
-model.train(X_train,y_train,learning_rate=0.02,epochs=10,batch_size=2)
+model.train(X_train,y_train,learning_rate=0.02,epochs=30,batch_size=3000)
 model.save("weights.json")
+#model.load("weights.json")
 print(model.accuracy(X_test[:1000],y_test[:1000]))
 
 

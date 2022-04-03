@@ -1,4 +1,5 @@
 import numpy as np
+from progress.bar import Bar
 from tensorflow import raw_ops
 from imageProccesing import ImageProccessing
 import json
@@ -6,13 +7,13 @@ np.random.seed(0)
 
 
 def binarize(array):
-    mask = np.zeros((10, array.shape[0]))
+    mask = np.zeros((array.shape[0],10))
     for i in range(array.shape[0]):
-        mask[array[i]][i] = 1
+        mask[i][array[i]] = 1
     return mask
 
 
-def cost(y_hat, y, epsilon=1e-12):
+def cost(y_hat, y, epsilon=1e-07):
     y_hat = np.clip(y_hat, epsilon, 1. - epsilon)
     return -np.sum(y * np.log(y_hat))
 
@@ -235,15 +236,22 @@ class Model:
         for i in range(epochs):
             avg_loss = 0
             cnt = 0
+            bar=Bar("Proccesing",max=X.shape[0]//batch_size,suffix="%(percent)d%%")
             for j in range(0, X.shape[0], batch_size):
-                X_batch = X[j:j + batch_size].reshape(batch_size, 28, 28, 1)
-                y_batch = y[:, j:j + batch_size]
+                if(j+batch_size>X.shape[0]):
+                    X_batch=np.concatenate((X[j:],X[:batch_size+j-X.shape[0]])).reshape(batch_size, 28, 28, 1)
+                    y_batch=np.concatenate((y[j:],y[:batch_size+j-y.shape[0]])).T
+                else:
+                    X_batch = X[j:j + batch_size].reshape(batch_size, 28, 28, 1)
+                    y_batch = y[j:j + batch_size].T
                 grads, loss = self.backward(X_batch, y_batch)
                 self.update_weights(grads, learning_rate)
                 avg_loss += loss
                 cnt += 1
+                bar.next()
+            bar.finish()
             sample_cost = cost(self.forward(X[0].reshape(
-                1, 28, 28, 1)), y[:, 0].reshape(10, 1))
+                1, 28, 28, 1)), y[0].reshape(10, 1))
             print(f"epoch {i}", "avg loss over batch:", avg_loss /
                   (cnt * batch_size), "sample loss:", sample_cost)
 

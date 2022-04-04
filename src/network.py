@@ -13,7 +13,7 @@ def binarize(array):
     return mask
 
 
-def cost(y_hat, y, epsilon=1e-07):
+def cost(y_hat, y, epsilon=1e-08):
     y_hat = np.clip(y_hat, epsilon, 1. - epsilon)
     return -np.sum(y * np.log(y_hat))
 
@@ -42,12 +42,13 @@ class Activation:
 
 class LayerConv2d:
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation_function="relu"):
+        self.gradient=None
         self.output = None
         self.stride = stride
         self.padding = padding
         self.kernels = self.__initialize_kernel(
                 (kernel_size, kernel_size, in_channels, out_channels))
-        self.biases = np.zeros((out_channels, 1), dtype=np.float64)
+        self.biases = np.zeros((out_channels, 1), dtype=np.float32)
 
         if activation_function == "relu":
             self.activation = Activation.relu
@@ -60,7 +61,7 @@ class LayerConv2d:
 
     def __initialize_kernel(self, size):
         stdev=1/np.sqrt(np.prod(size))
-        return np.random.normal(size=size,scale=stdev).astype(np.float64)
+        return np.random.normal(size=size,scale=stdev).astype(np.float32)
 
     def forward1(self, image):
         self.linear_comb = ImageProccessing.my_convolution(
@@ -82,11 +83,13 @@ class LayerConv2d:
                                            1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding, data_format='NHWC')
         d_input = raw_ops.Conv2DBackpropInput(input_sizes=input.shape, filter=self.kernels, out_backprop=delta, strides=[
             1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding)
+        self.gradient=d_input
         return d_b, d_w, d_input
 
 
 class MaxPooling:
     def __init__(self, kernel_size, stride=1):
+        self.gradient=None
         self.output = None
         self.stride = stride
         self.kernel_size = kernel_size
@@ -97,16 +100,18 @@ class MaxPooling:
 
     def forward(self, image):
         self.output = raw_ops.MaxPool(input=image, ksize=[1, self.kernel_size, self.kernel_size, 1],
-                                      strides=[1, self.stride, self.stride, 1], padding="VALID").numpy()
+                                        strides=[1, self.stride, self.stride, 1], padding="VALID").numpy()
 
     def backward(self, delta, input):
         d_pooling = raw_ops.MaxPoolGrad(orig_input=input, orig_output=self.output, grad=delta, ksize=[1, self.kernel_size, self.kernel_size, 1],
                                         strides=[1, self.stride, self.stride, 1], padding="VALID")
+        self.gradient=d_pooling
         return d_pooling
 
 
 class LayerDense:
     def __init__(self, n_input, n_neurons, activation_function=None, weights=None):
+        self.gradient=None
         self.linear_comb = None
         self.output = None
         if activation_function == "relu":
@@ -121,8 +126,8 @@ class LayerDense:
             raise Exception("not supported activation function")
 
         if weights is None:
-            self.weights = np.random.normal(size=(n_neurons, n_input),scale=1/np.sqrt(n_input*n_neurons)).astype(np.float64)
-            self.biases = np.zeros((n_neurons, 1), dtype=np.float64)
+            self.weights = np.random.normal(size=(n_neurons, n_input),scale=1/np.sqrt(n_input*n_neurons)).astype(np.float32)
+            self.biases = np.zeros((n_neurons, 1), dtype=np.float32)
         else:
             self.weights = weights[0]
             self.biases = weights[1]
@@ -137,6 +142,7 @@ class LayerDense:
         d_w = np.dot(delta, input_layer.output.T)
         d_input = np.dot(self.weights.T, delta) * input_layer.derivative(
             input_layer.linear_comb)
+        self.gradient=d_input
         return d_b / m, d_w / m, d_input
 
 
@@ -185,6 +191,7 @@ class Model:
 
                 d_wrt_z = np.dot(self.layers[i].weights.T, delta)
                 delta = d_wrt_z.reshape(self.layers[i - 1].output.shape)
+                self.layers[i].gradient=delta
                 conv_layer_count = i
                 break
 

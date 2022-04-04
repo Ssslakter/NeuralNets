@@ -41,15 +41,12 @@ class Activation:
 
 
 class LayerConv2d:
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation_function="relu", kernels=None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation_function="relu"):
         self.output = None
         self.stride = stride
         self.padding = padding
-        if kernels is None:
-            self.kernels = self.__initialize_kernel(
+        self.kernels = self.__initialize_kernel(
                 (kernel_size, kernel_size, in_channels, out_channels))
-        else:
-            self.kernels = kernels
         self.biases = np.zeros((out_channels, 1), dtype=np.float64)
 
         if activation_function == "relu":

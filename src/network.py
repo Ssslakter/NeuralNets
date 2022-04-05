@@ -76,13 +76,14 @@ class LayerConv2d:
         self.output = self.activation(self.linear_comb)
 
     def backward(self, delta, input):
-        d_b = np.sum(delta, axis=(0, 1, 2))
-        conv_padding = [*[0] * 2, *[self.padding]
-                        * 2, *[self.padding] * 2, *[0] * 2]
+        m = delta.shape[0]
+        d_b = np.sum(delta, axis=(0, 1, 2))/m        
+        conv_padding = [*[0] * 2, *[self.padding] * 2, *[self.padding] * 2, *[0] * 2]
         d_w = raw_ops.Conv2DBackpropFilter(input=input, filter_sizes=self.kernels.shape, out_backprop=delta, strides=[
-                                           1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding, data_format='NHWC')
+            1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding, data_format='NHWC')
         d_input = raw_ops.Conv2DBackpropInput(input_sizes=input.shape, filter=self.kernels, out_backprop=delta, strides=[
             1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding)
+
         self.gradient=d_input
         return d_b, d_w, d_input
 
@@ -108,6 +109,16 @@ class MaxPooling:
         self.gradient=d_pooling
         return d_pooling
 
+class Flatten:
+    def __init__(self):
+        self.gradient=None
+        self.output = None
+    def forward(self, input):
+        self.output = input.reshape(input.shape[0], np.prod(input.shape[1:])).T
+
+    def backward(self,delta,input):
+        self.gradient=delta.reshape(input.shape)
+        return self.gradient
 
 class LayerDense:
     def __init__(self, n_input, n_neurons, activation_function=None, weights=None):
@@ -136,12 +147,11 @@ class LayerDense:
         self.linear_comb = np.dot(self.weights, input) + self.biases
         self.output = self.activation(self.linear_comb)
 
-    def backward(self, delta, input_layer):
+    def backward(self, delta, input):
         m = delta.shape[-1]
         d_b = np.sum(delta, axis=1, keepdims=True)
-        d_w = np.dot(delta, input_layer.output.T)
-        d_input = np.dot(self.weights.T, delta) * input_layer.derivative(
-            input_layer.linear_comb)
+        d_w = np.dot(delta, input.T)
+        d_input = np.dot(self.weights.T, delta)
         self.gradient=d_input
         return d_b / m, d_w / m, d_input
 
@@ -158,68 +168,37 @@ class Model:
     def forward(self, input):
         self.layers[0].forward(input)
         for i in range(1, self.size):
-            if(isinstance(self.layers[i], LayerDense) and isinstance(self.layers[i - 1], (LayerConv2d, MaxPooling))):
-                prev_input = self.layers[i - 1].output
-                prev_input = prev_input.reshape(
-                    prev_input.shape[0], np.prod(prev_input.shape[1:]))
-                self.layers[i].forward(prev_input.T)
-            else:
-                self.layers[i].forward(self.layers[i - 1].output)
+            self.layers[i].forward(self.layers[i - 1].output)
 
-        output = self.layers[self.size - 1].output
-        return output
+        return self.layers[self.size - 1].output
 
     def backward(self, input, y):
-        conv_layer_count = 0
         output = self.forward(input)
         m = output.shape[1]
 
         grads = [0] * self.size
         delta = output - y
 
-        for i in range(self.size - 1, 0, -1):
-            if(isinstance(self.layers[i - 1], (LayerConv2d, MaxPooling))):
-                prev_input = self.layers[i - 1].output
-                # now it will be in default dense layer shape
-                prev_input = prev_input.reshape(
-                    prev_input.shape[0], np.prod(prev_input.shape[1:])).T
-
-                d_w = np.dot(delta, prev_input.T) / m
-                d_b = np.sum(delta, axis=1, keepdims=True) / m
-
-                grads[i] = [d_w, d_b]
-
-                d_wrt_z = np.dot(self.layers[i].weights.T, delta)
-                delta = d_wrt_z.reshape(self.layers[i - 1].output.shape)
-                self.layers[i].gradient=delta
-                conv_layer_count = i
-                break
-
-            (d_b, d_w, delta) = self.layers[i].backward(
-                delta, self.layers[i - 1])
-            grads[i] = [d_w, d_b]
-
-        for i in range(conv_layer_count - 1, 0, -1):
-            layer = self.layers[i]
-            if(isinstance(layer, LayerConv2d)):
-                delta = self.layers[i].derivative(
-                    self.layers[i].linear_comb) * delta
-                (d_b, d_w, delta) = layer.backward(
+        for i in range(self.size - 1, -1, -1):
+            curr_layer=self.layers[i]
+            if(i==self.size-1):
+                (d_b, d_w, delta) = curr_layer.backward(
                     delta, self.layers[i - 1].output)
                 grads[i] = [d_w, d_b]
-            elif(isinstance(layer, MaxPooling)):
-                delta = layer.backward(delta, self.layers[i - 1].output)
+            elif(i==0):
+                delta = curr_layer.derivative(curr_layer.linear_comb) * delta
+                (d_b, d_w, delta) = curr_layer.backward(
+                    delta, input)
+                grads[i] = [d_w, d_b]
+            else:
+                if(isinstance(curr_layer,(MaxPooling,Flatten))):
+                    delta=curr_layer.backward(delta,self.layers[i - 1].output)
+                else:
+                    delta = curr_layer.derivative(curr_layer.linear_comb) * delta
+                    (d_b, d_w, delta) = curr_layer.backward(
+                        delta, self.layers[i - 1].output)
+                    grads[i] = [d_w, d_b]
 
-        layer = self.layers[0]
-        if(isinstance(layer, LayerConv2d)):
-            delta = layer.derivative(
-                layer.linear_comb) * delta
-            (d_b, d_w, delta) = layer.backward(delta, input)
-        else:
-            m = delta.shape[-1]
-            d_b = np.sum(delta, axis=1, keepdims=True) / m
-            d_w = np.dot(delta, input.T) / m
-        grads[0] = [d_w, d_b]
         loss = cost(output, y)
         return grads, loss
 

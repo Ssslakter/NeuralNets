@@ -77,7 +77,7 @@ class LayerConv2d:
 
     def backward(self, delta, input):
         m = delta.shape[0]
-        d_b = np.sum(delta, axis=(0, 1, 2))/m        
+        d_b = np.sum(delta, axis=(0, 1, 2))/m
         conv_padding = [*[0] * 2, *[self.padding] * 2, *[self.padding] * 2, *[0] * 2]
         d_w = raw_ops.Conv2DBackpropFilter(input=input, filter_sizes=self.kernels.shape, out_backprop=delta, strides=[
             1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding, data_format='NHWC')
@@ -104,10 +104,9 @@ class MaxPooling:
                                         strides=[1, self.stride, self.stride, 1], padding="VALID").numpy()
 
     def backward(self, delta, input):
-        d_pooling = raw_ops.MaxPoolGrad(orig_input=input, orig_output=self.output, grad=delta, ksize=[1, self.kernel_size, self.kernel_size, 1],
+        self.gradient = raw_ops.MaxPoolGrad(orig_input=input, orig_output=self.output, grad=delta, ksize=[1, self.kernel_size, self.kernel_size, 1],
                                         strides=[1, self.stride, self.stride, 1], padding="VALID")
-        self.gradient=d_pooling
-        return d_pooling
+        return self.gradient
 
 class Flatten:
     def __init__(self):
@@ -117,7 +116,7 @@ class Flatten:
         self.output = input.reshape(input.shape[0], np.prod(input.shape[1:])).T
 
     def backward(self,delta,input):
-        self.gradient=delta.reshape(input.shape)
+        self.gradient=delta.T.reshape(input.shape)
         return self.gradient
 
 class LayerDense:

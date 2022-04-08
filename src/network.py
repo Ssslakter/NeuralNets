@@ -1,158 +1,13 @@
 import numpy as np
+import Layers
 from progress.bar import Bar
-from tensorflow import raw_ops
-from imageProccesing import ImageProccessing
 import json
 np.random.seed(0)
-
-
-def binarize(array):
-    mask = np.zeros((array.shape[0],10))
-    for i in range(array.shape[0]):
-        mask[i][array[i]] = 1
-    return mask
 
 
 def cost(y_hat, y, epsilon=1e-08):
     y_hat = np.clip(y_hat, epsilon, 1. - epsilon)
     return -np.sum(y * np.log(y_hat))
-
-
-class Activation:
-    def relu(x):
-        y = np.copy(x)
-        y[y < 0] = 0
-        return y
-
-    def sigmoid(x):
-        return raw_ops.Sigmoid(x=x).numpy()
-
-    def d_sigmoid(x):
-        return Activation.sigmoid(x) * (1 - Activation.sigmoid(x))
-
-    def softmax(x):
-        return raw_ops.Softmax(logits=x.T).numpy().T
-
-    def d_relu(x):
-        y = np.copy(x)
-        y[y < 0] = 0
-        y[y > 0] = 1
-        return y
-
-
-class LayerConv2d:
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, activation_function="relu"):
-        self.gradient=None
-        self.output = None
-        self.stride = stride
-        self.padding = padding
-        self.kernels = self.__initialize_kernel(
-                (kernel_size, kernel_size, in_channels, out_channels))
-        self.biases = np.zeros((out_channels, 1), dtype=np.float32)
-
-        if activation_function == "relu":
-            self.activation = Activation.relu
-            self.derivative = Activation.d_relu
-        elif activation_function == "sigmoid":
-            self.activation = Activation.sigmoid
-            self.derivative = Activation.d_sigmoid
-        else:
-            raise Exception("not supported activation function")
-
-    def __initialize_kernel(self, size):
-        stdev=1/np.sqrt(np.prod(size))
-        return np.random.normal(size=size,scale=stdev).astype(np.float32)
-
-    def forward1(self, image):
-        self.linear_comb = ImageProccessing.my_convolution(
-            image, self.kernels, self.stride, self.padding) + self.biases.reshape(1, 1, *self.biases.shape[::-1])
-        self.output = self.activation(self.linear_comb)
-
-    def forward(self, image):
-        conv_padding = [*[0] * 2, *[self.padding]
-                        * 2, *[self.padding] * 2, *[0] * 2]
-        self.linear_comb = raw_ops.Conv2D(input=image, filter=self.kernels, strides=[
-            1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding)
-        self.output = self.activation(self.linear_comb)
-
-    def backward(self, delta, input):
-        m = delta.shape[0]
-        d_b = np.sum(delta, axis=(0, 1, 2))/m
-        conv_padding = [*[0] * 2, *[self.padding] * 2, *[self.padding] * 2, *[0] * 2]
-        d_w = raw_ops.Conv2DBackpropFilter(input=input, filter_sizes=self.kernels.shape, out_backprop=delta, strides=[
-            1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding, data_format='NHWC')
-        d_input = raw_ops.Conv2DBackpropInput(input_sizes=input.shape, filter=self.kernels, out_backprop=delta, strides=[
-            1, self.stride, self.stride, 1], padding="EXPLICIT", explicit_paddings=conv_padding)
-
-        self.gradient=d_input
-        return d_b, d_w, d_input
-
-
-class MaxPooling:
-    def __init__(self, kernel_size, stride=1):
-        self.gradient=None
-        self.output = None
-        self.stride = stride
-        self.kernel_size = kernel_size
-
-    def forward1(self, image):
-        self.output = ImageProccessing.my_max_pool(
-            image, self.kernel_size, self.padding, self.stride)
-
-    def forward(self, image):
-        self.output = raw_ops.MaxPool(input=image, ksize=[1, self.kernel_size, self.kernel_size, 1],
-                                        strides=[1, self.stride, self.stride, 1], padding="VALID").numpy()
-
-    def backward(self, delta, input):
-        self.gradient = raw_ops.MaxPoolGrad(orig_input=input, orig_output=self.output, grad=delta, ksize=[1, self.kernel_size, self.kernel_size, 1],
-                                        strides=[1, self.stride, self.stride, 1], padding="VALID")
-        return self.gradient
-
-class Flatten:
-    def __init__(self):
-        self.gradient=None
-        self.output = None
-    def forward(self, input):
-        self.output = input.reshape(input.shape[0], np.prod(input.shape[1:])).T
-
-    def backward(self,delta,input):
-        self.gradient=delta.T.reshape(input.shape)
-        return self.gradient
-
-class LayerDense:
-    def __init__(self, n_input, n_neurons, activation_function=None, weights=None):
-        self.gradient=None
-        self.linear_comb = None
-        self.output = None
-        if activation_function == "relu":
-            self.activation = Activation.relu
-            self.derivative = Activation.d_relu
-        elif activation_function == "sigmoid":
-            self.activation = Activation.sigmoid
-            self.derivative = Activation.d_sigmoid
-        elif activation_function == "softmax":
-            self.activation = Activation.softmax
-        else:
-            raise Exception("not supported activation function")
-
-        if weights is None:
-            self.weights = np.random.normal(size=(n_neurons, n_input),scale=1/np.sqrt(n_input*n_neurons)).astype(np.float32)
-            self.biases = np.zeros((n_neurons, 1), dtype=np.float32)
-        else:
-            self.weights = weights[0]
-            self.biases = weights[1]
-
-    def forward(self, input):
-        self.linear_comb = np.dot(self.weights, input) + self.biases
-        self.output = self.activation(self.linear_comb)
-
-    def backward(self, delta, input):
-        m = delta.shape[-1]
-        d_b = np.sum(delta, axis=1, keepdims=True)
-        d_w = np.dot(delta, input.T)
-        d_input = np.dot(self.weights.T, delta)
-        self.gradient=d_input
-        return d_b / m, d_w / m, d_input
 
 
 class Model:
@@ -171,32 +26,34 @@ class Model:
 
         return self.layers[self.size - 1].output
 
+    def evaluate(self, input):
+        self.layers[0].forward(input)
+        for i in range(1, self.size):
+            if(isinstance(self.layers[i], Layers.BatchNorm)):
+                self.layers[i].evaluate(self.layers[i - 1].output)
+            else:
+                self.layers[i].forward(self.layers[i - 1].output)
+
+        return self.layers[self.size - 1].output
+
     def backward(self, input, y):
         output = self.forward(input)
-        m = output.shape[1]
 
         grads = [0] * self.size
         delta = output - y
 
-        for i in range(self.size - 1, -1, -1):
-            curr_layer=self.layers[i]
-            if(i==self.size-1):
+        for i in range(self.size - 2, 0, -1):
+            curr_layer = self.layers[i]
+            if(isinstance(curr_layer, (Layers.MaxPooling, Layers.Flatten, Layers.Activation))):
+                delta = curr_layer.backward(delta, self.layers[i - 1].output)
+            else:
                 (d_b, d_w, delta) = curr_layer.backward(
                     delta, self.layers[i - 1].output)
                 grads[i] = [d_w, d_b]
-            elif(i==0):
-                delta = curr_layer.derivative(curr_layer.linear_comb) * delta
-                (d_b, d_w, delta) = curr_layer.backward(
-                    delta, input)
-                grads[i] = [d_w, d_b]
-            else:
-                if(isinstance(curr_layer,(MaxPooling,Flatten))):
-                    delta=curr_layer.backward(delta,self.layers[i - 1].output)
-                else:
-                    delta = curr_layer.derivative(curr_layer.linear_comb) * delta
-                    (d_b, d_w, delta) = curr_layer.backward(
-                        delta, self.layers[i - 1].output)
-                    grads[i] = [d_w, d_b]
+
+        (d_b, d_w, delta) = self.layers[0].backward(
+            delta, input)
+        grads[0] = [d_w, d_b]
 
         loss = cost(output, y)
         return grads, loss
@@ -204,28 +61,46 @@ class Model:
     def update_weights(self, grads, lr):
         for i in range(self.size):
             layer = self.layers[i]
-            if(isinstance(layer, LayerConv2d)):
+            if(isinstance(layer, Layers.Conv2D)):
                 layer.kernels -= lr * grads[i][0].numpy()
-                layer.biases -= lr * grads[i][1].reshape(layer.biases.shape)
-            elif(isinstance(layer, LayerDense)):
+                layer.biases -= lr * grads[i][1]
+            elif(isinstance(layer, Layers.Dense)):
                 layer.weights -= lr * grads[i][0]
                 layer.biases -= lr * grads[i][1]
+            elif(isinstance(layer,Layers.BatchNorm)):
+                layer.gamma -= lr * grads[i][0]
+                layer.beta -= lr * grads[i][1]
 
-    def train(self, X, y, learning_rate=0.2, epochs=10, batch_size=400):
-        '''
-        y must be binarized
-        '''
+    def train(self, X, y, learning_rate=0.02, epochs=10, batch_size=512):
+        """
+        Parameters
+        ----------
+        X : numpy array
+            The input dataset
+        y : numpy array
+            The target variables dataset (must be binarized)
+        learning_rate : float, optional
+            The learning rate (default is 0.02)
+        epochs: int
+            Number of iterations (default is 10)
+        batch_size: int
+            Number of samples in one batch (default is 512)
+        """
         for i in range(epochs):
             avg_loss = 0
             cnt = 0
-            bar=Bar("Proccesing",max=X.shape[0]//batch_size,suffix="%(percent)d%%")
+            bar = Bar("Proccesing",
+                      max=X.shape[0] // batch_size, suffix="%(percent)d%%")
             for j in range(0, X.shape[0], batch_size):
-                if(j+batch_size>X.shape[0]):
-                    X_batch=np.concatenate((X[j:],X[:batch_size+j-X.shape[0]])).reshape(batch_size, 28, 28, 1)
-                    y_batch=np.concatenate((y[j:],y[:batch_size+j-y.shape[0]])).T
+                if(j + batch_size > X.shape[0]):
+                    X_batch = np.concatenate(
+                        (X[j:], X[:batch_size + j - X.shape[0]])).reshape(batch_size, 28, 28, 1)
+                    y_batch = np.concatenate(
+                        (y[j:], y[:batch_size + j - y.shape[0]]))
                 else:
-                    X_batch = X[j:j + batch_size].reshape(batch_size, 28, 28, 1)
-                    y_batch = y[j:j + batch_size].T
+                    X_batch = X[j:j +
+                                batch_size].reshape(batch_size, 28, 28, 1)
+                    y_batch = y[j:j + batch_size]
                 grads, loss = self.backward(X_batch, y_batch)
                 self.update_weights(grads, learning_rate)
                 avg_loss += loss
@@ -233,7 +108,7 @@ class Model:
                 bar.next()
             bar.finish()
             sample_cost = cost(self.forward(X[0].reshape(
-                1, 28, 28, 1)), y[0].reshape(10, 1))
+                1, 28, 28, 1)), y[0])
             print(f"epoch {i}", "avg loss over batch:", avg_loss /
                   (cnt * batch_size), "sample loss:", sample_cost)
 
@@ -274,6 +149,6 @@ class Model:
         '''
         acc = 0
         ans = self.forward(X.reshape(X.shape[0], 28, 28, 1))
-        predicted = np.argmax(ans, axis=0)
+        predicted = np.argmax(ans, axis=1)
         acc = np.sum(predicted == y) / y.shape[0]
         return acc

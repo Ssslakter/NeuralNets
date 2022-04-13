@@ -116,12 +116,12 @@ class Model:
         dict = json.load(open(file_path))
         try:
             for i in range(self.size):
-                if(isinstance(self.layers[i], LayerDense)):
+                if(isinstance(self.layers[i], Layers.Dense)):
                     self.layers[i].weights = np.array(
                         dict[f"layer{i}"]["weights"])
                     self.layers[i].biases = np.array(
                         dict[f"layer{i}"]["biases"])
-                elif(isinstance(self.layers[i], LayerConv2d)):
+                elif(isinstance(self.layers[i], Layer.Conv2D)):
                     self.layers[i].kernels = np.array(
                         dict[f"layer{i}"]["kernels"])
                     self.layers[i].biases = np.array(
@@ -133,10 +133,10 @@ class Model:
         file = open(file_path, "w")
         data = {}
         for i in range(self.size):
-            if(isinstance(self.layers[i], LayerDense)):
+            if(isinstance(self.layers[i], Layers.Dense)):
                 data[f"layer{i}"] = {"weights": self.layers[i].weights.tolist(),
                                      "biases": self.layers[i].biases.tolist()}
-            elif(isinstance(self.layers[i], LayerConv2d)):
+            elif(isinstance(self.layers[i], Layers.Conv2D)):
                 data[f"layer{i}"] = {"kernels": self.layers[i].kernels.tolist(),
                                      "biases": self.layers[i].biases.tolist()}
 
